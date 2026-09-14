@@ -1,0 +1,28 @@
+# Nanda et al. 2023 baseline: 1-layer transformer on (a + b) mod 113.
+data:
+  p: 113
+  train_frac: 0.3
+  split_seed: 0        # fixed across training seeds: seeds vary the init only
+
+model:
+  n_layers: 1
+  n_heads: 4
+  d_model: 128
+  d_head: 32
+  d_mlp: 512
+  act_fn: relu
+
+optim:
+  name: adamw
+  lr: 1.0e-3
+  betas: [0.9, 0.98]
+  weight_decay: 1.0    # THE critical hyperparameter; at 0 the model never generalises
+
+train:
+  num_steps: 40000
+  log_every: 100
+  num_checkpoints: 20  # log-spaced in [1, num_steps], plus step 0
+
+runtime:
+  device: cuda         # committed results were produced on a GPU (see results/*/ENVIRONMENT.txt)
+  num_threads: 1       # CPU threads per run; fixed so any CPU-side reductions are reproducible

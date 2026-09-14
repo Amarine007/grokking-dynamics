@@ -1,0 +1,5 @@
+# Committed metrics are compared byte-for-byte (experiments/regenerate_checkpoints.py),
+# so git must never rewrite their line endings.
+*.csv -text
+*.log -text
+results/**/*.txt -text
