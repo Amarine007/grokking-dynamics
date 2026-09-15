@@ -1,8 +1,10 @@
 # grokking-dynamics
 
-Replication and mechanistic analysis of Nanda et al. 2023, *Progress Measures for
-Grokking via Mechanistic Interpretability* (arXiv 2301.05217): a 1-layer transformer
-trained on (a + b) mod 113.
+A small decoder-only transformer trained on modular addition mod 113, where the model reaches 100% training accuracy within a few hundred steps and then sits at chance-level test accuracy for thousands more before generalization arrives abruptly. This repo reproduces that delayed-generalization curve across multiple seeds and then investigates what changes inside the network during the plateau — the window where every metric you'd normally watch is flat but the representation is evidently reorganizing. The task is deliberately tiny and fully specified: because the ground truth has known algebraic structure, claims about what the model encodes internally can be checked against the group structure rather than against intuition. Results are reported over multiple seeds with variance, since onset timing on this task is variable enough that single-run curves are misleading.
+
+The implementation replicates Nanda et al. 2023, *Progress Measures for Grokking via
+Mechanistic Interpretability* (arXiv 2301.05217): a 1-layer transformer with no LayerNorm,
+biases, or dropout, trained on (a + b) mod 113.
 
 ## Setup
 
