@@ -121,6 +121,33 @@ the population when the MLP is read out, not inside any individual neuron. Consi
 sharing a frequency have phases spread around the circle (mean circular resultant 0.12, max 0.49, where 0
 is uniform and 1 would be identical phases).
 
+### Attention is not just a router
+
+A follow-up asked whether attention participates in the algorithm or merely pours *a* and *b* into the
+final position. Two findings, across all ten seeds ([`results/02_attention/`](results/02_attention)):
+
+**Attention here is fully characterised, not merely sampled.** The final position always holds `=` and
+the model has no LayerNorm, so the residual stream there *before* attention is `W_E[113] + W_pos[2]` —
+the same vector for every input. The query is therefore constant, and the three attention scores reduce
+to a function of *a* alone, a function of *b* alone, and a constant. Measured: the query's spread over
+all 12,769 inputs is exactly **0.0** in every seed, and the departure from that factorisation is at most
+**2.6e-7**, which is floating-point noise. So each head's attention is two 1-D functions of 113 values
+plus a scalar — about 900 numbers for the whole layer. This is a direct payoff of the no-LayerNorm
+choice.
+
+**But it is strongly input-dependent.** Averaged over inputs the pattern looks like a boring symmetric
+router: 0.479 on *a*, 0.479 on *b*, 0.042 on `=`, with the *a* and *b* weights differing by at most
+0.0022 — the commutativity of addition showing up directly in the weights. The per-input standard
+deviation, however, is 0.29. Replacing the pattern with that mean, making it a genuinely fixed router,
+drops test accuracy from 100% to **48% ± 11%**, in every seed.
+
+Mean-ablating a single head costs 41–48 accuracy points on average, but *which* head matters is
+seed-dependent (individual seeds range from 12% to 88%), so there is no consistent head specialisation.
+
+**This means the picture above is incomplete.** The key frequencies carry the computation, but attention
+is not a passive mixer feeding them — freezing it costs about as much as deleting an entire head. What
+attention computes with its two 1-D functions is not yet established.
+
 ### Seed 2's 24 errors
 
 Seed 2 is the one seed that never reaches 100%. Its 24 wrong test pairs
