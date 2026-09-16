@@ -2,15 +2,26 @@
 
     python colab/make_bundle.py
 
-Upload the zip when colab/stage1_colab.ipynb asks for it. No results or checkpoints
-are included; the notebook produces them.
+Upload the zip when a colab/*.ipynb notebook asks for it. Checkpoints are not included
+(the notebooks produce them), but the committed CSVs in results/ ARE: without them
+regenerate_checkpoints.py has nothing to byte-compare against and silently reports
+NO COMMITTED CSV instead of MATCH, which is how a 45-minute run once verified nothing.
 """
 
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-INCLUDE = ["src", "experiments", "configs", "tests", "figures/make_all.py", "requirements.txt", "README.md"]
+INCLUDE = [
+    "src",
+    "experiments",
+    "configs",
+    "tests",
+    "results",  # committed CSVs: required for the regenerate_checkpoints byte-comparison
+    "figures/make_all.py",
+    "requirements.txt",
+    "README.md",
+]
 OUT = ROOT / "colab" / "grokking-dynamics.zip"
 
 
