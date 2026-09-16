@@ -1,0 +1,26 @@
+# Stage 2: reverse-engineering the circuit of the grokked models.
+# Analysis only -- reads checkpoints produced by configs/baseline.yaml and never trains.
+
+source:
+  experiment: 01_baseline
+  config: baseline     # checkpoints/01_baseline/baseline_seed{k}/stepNNNNNN.pt
+  step: 40000          # the final, fully grokked checkpoint
+  seeds: 0-9
+
+analysis:
+  # A frequency is "key" if it carries at least this fraction of the embedding's
+  # squared Frobenius norm. Declared in advance, not fitted: the full spectrum is
+  # written to results/02_fourier/embedding_spectrum.csv so the cutoff and the gap
+  # around it stay visible and the choice can be second-guessed.
+  key_frequency_threshold: 0.01
+  # Per-neuron detail (512 rows) is written for this seed only; every other seed gets
+  # distribution summaries. Seed 0 is the reference run used throughout the project.
+  reference_seed: 0
+  # A neuron counts as "explained" in the summary counts if its fraction of variance
+  # explained by cos/sin(w_k(a+b)) at the key frequencies is at least this.
+  neuron_explained_threshold: 0.9
+
+runtime:
+  device: cpu          # forward passes and small matrix decompositions only
+  num_threads: 1
+  batch_size: 4096     # inputs per forward pass when caching activations
