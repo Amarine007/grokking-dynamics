@@ -63,10 +63,35 @@ def seed_everything(seed: int) -> None:
     torch.manual_seed(seed)
 
 
-def checkpoint_steps(num_steps: int, n: int) -> list[int]:
-    """Step 0 plus ~n log-spaced steps in [1, num_steps] (always including num_steps)."""
+def log_checkpoint_steps(num_steps: int, n: int) -> list[int]:
+    """Step 0 plus ~n log-spaced steps in [1, num_steps] (always including num_steps).
+
+    These are the spec's ~20 checkpoints and are saved in full, with optimizer state.
+    """
     steps = np.unique(np.round(np.geomspace(1, num_steps, n)).astype(int))
     return sorted({0, *steps.tolist()})
+
+
+def dense_checkpoint_steps(num_steps: int, every: int | None, every_until: int | None = None) -> list[int]:
+    """Every `every` steps up to `every_until` (default num_steps); empty if `every` is falsy.
+
+    Log spacing straddles the grokking transition, so progress measures need uniform
+    resolution through it. These extras are saved weights-only: restricted and excluded
+    loss are forward passes and never resume training.
+    """
+    if not every:
+        return []
+    limit = num_steps if every_until is None else min(every_until, num_steps)
+    return list(range(0, limit + 1, every))
+
+
+def checkpoint_steps(
+    num_steps: int, n: int, every: int | None = None, every_until: int | None = None
+) -> list[int]:
+    """The union of the log-spaced schedule and the optional dense one."""
+    return sorted(
+        set(log_checkpoint_steps(num_steps, n)) | set(dense_checkpoint_steps(num_steps, every, every_until))
+    )
 
 
 def cross_entropy_high_precision(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
@@ -114,26 +139,31 @@ def build_optimizer(model: torch.nn.Module, cfg: dict) -> torch.optim.Optimizer:
     )
 
 
-def save_checkpoint(path: Path, *, step: int, seed: int, cfg: dict, model: Transformer, opt) -> None:
+def save_checkpoint(path: Path, *, step: int, seed: int, cfg: dict, model: Transformer, opt=None) -> None:
+    """Write a checkpoint atomically.
+
+    With `opt`, the checkpoint is full and resumable (optimizer + RNG state), ~2.6 MB.
+    Without it, only the weights are stored (~0.87 MB) -- enough for any analysis that
+    just runs the model forward, which is all the progress measures need.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "step": step,
+        "seed": seed,
+        "config": cfg,
+        "model_config": model.cfg.to_dict(),
+        "model": model.state_dict(),
+    }
+    if opt is not None:
+        payload["optimizer"] = opt.state_dict()
+        payload["rng"] = {
+            "torch": torch.get_rng_state(),
+            "numpy": np.random.get_state(),
+            "python": random.getstate(),
+            "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        }
     tmp = path.with_suffix(".tmp")
-    torch.save(
-        {
-            "step": step,
-            "seed": seed,
-            "config": cfg,
-            "model_config": model.cfg.to_dict(),
-            "model": model.state_dict(),
-            "optimizer": opt.state_dict(),
-            "rng": {
-                "torch": torch.get_rng_state(),
-                "numpy": np.random.get_state(),
-                "python": random.getstate(),
-                "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
-            },
-        },
-        tmp,
-    )
+    torch.save(payload, tmp)
     os.replace(tmp, path)
 
 
@@ -179,7 +209,13 @@ def train(cfg: dict, seed: int, csv_path: Path, ckpt_dir: Path | None, verbose: 
 
     t = cfg["train"]
     num_steps, log_every = t["num_steps"], t["log_every"]
-    ckpt_steps = set(checkpoint_steps(num_steps, t["num_checkpoints"]))
+    # Optional keys: a config without them keeps the original log-spaced-only schedule.
+    full_steps = set(log_checkpoint_steps(num_steps, t["num_checkpoints"]))
+    ckpt_steps = set(
+        checkpoint_steps(
+            num_steps, t["num_checkpoints"], t.get("checkpoint_every"), t.get("checkpoint_every_until")
+        )
+    )
 
     csv_path = Path(csv_path)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -203,7 +239,11 @@ def train(cfg: dict, seed: int, csv_path: Path, ckpt_dir: Path | None, verbose: 
                         flush=True,
                     )
             if ckpt_dir is not None and step in ckpt_steps:
-                save_checkpoint(Path(ckpt_dir) / f"step{step:06d}.pt", step=step, seed=seed, cfg=cfg, model=model, opt=opt)
+                save_checkpoint(
+                    Path(ckpt_dir) / f"step{step:06d}.pt",
+                    step=step, seed=seed, cfg=cfg, model=model,
+                    opt=opt if step in full_steps else None,
+                )
             if step == num_steps:
                 break
 
