@@ -257,19 +257,27 @@ def write_reference_detail(cfg: dict, seed: int, p: int, result: dict) -> None:
             for i, k in enumerate(key_sorted)
         ],
     )
-    # The figure plots one neuron over the whole (a, b) grid, so its activations have to
-    # live in a CSV -- figures never load checkpoints.
-    best = int(torch.argmax(fve).item())
-    print(f"  heatmap neuron: {best} (fve {fve[best].item():.4f}, "
-          f"frequency {key_sorted[dominant[best]]})")
-    write_csv(
-        OUT_DIR / f"neuron_heatmap_seed{seed}.csv",
-        [
-            {"seed": seed, "neuron": best, "a": a, "b": b, "activation": f"{acts[a, b, best].item():.6g}"}
+    # Figures plot whole neurons over the (a, b) grid, so those activations have to live
+    # in a CSV -- figures never load checkpoints. Two neurons are exported under a
+    # `selection` tag: the one most concentrated at a single frequency, which is what a
+    # typical neuron in this circuit looks like, and the one best explained by a + b
+    # alone, which is the best case for the strong claim. They are usually different
+    # neurons, and the gap between them is itself part of the Stage 2 result.
+    chosen = {
+        "single_frequency": int(torch.argmax(sf["best_fve"]).item()),
+        "sum_of_inputs": int(torch.argmax(fve).item()),
+    }
+    rows = []
+    for tag, n in chosen.items():
+        print(f"  heatmap neuron ({tag}): {n} at frequency {key_sorted[dominant[n]]}, "
+              f"single_fve {sf['best_fve'][n].item():.4f}, sum_fve {fve[n].item():.4f}")
+        rows += [
+            {"seed": seed, "selection": tag, "neuron": n, "a": a, "b": b,
+             "activation": f"{acts[a, b, n].item():.6g}"}
             for a in range(p)
             for b in range(p)
-        ],
-    )
+        ]
+    write_csv(OUT_DIR / f"neuron_heatmap_seed{seed}.csv", rows)
 
 
 def main() -> None:
