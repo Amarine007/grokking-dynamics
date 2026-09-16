@@ -71,7 +71,7 @@ src/train.py       full-batch training loop, CSV logging, checkpointing, determi
 experiments/       one script per numbered experiment, plus regenerate_checkpoints.py
 results/           raw metrics as CSV (committed), environment record, run logs
 figures/           make_all.py regenerates every figure from results/ without retraining
-colab/             notebook and bundling script for running on a Colab GPU
+colab/             notebooks and bundling script for running on a Colab GPU
 tests/             split determinism, seed reproducibility, TransformerLens port
 ```
 
@@ -106,16 +106,32 @@ python experiments/regenerate_checkpoints.py --all --jobs 2
 Outputs:
 - **Metrics:** `results/{experiment}/{config}_seed{k}.csv`. Columns: step, train/test loss, train/test accuracy,
   and the L2 norm of all parameters. A row is written every 100 steps and flushed immediately.
-- **Checkpoints:** `checkpoints/{experiment}/{config}_seed{k}/stepNNNNNN.pt`, holding the model and optimizer
-  state, at step 0 plus ~20 log-spaced steps.
+- **Checkpoints:** `checkpoints/{experiment}/{config}_seed{k}/stepNNNNNN.pt`. Two schedules, unioned:
+  - **~20 log-spaced steps plus step 0**, saved in full, with optimizer and RNG state (~2.6 MB each).
+  - **Every `train.checkpoint_every` steps up to `train.checkpoint_every_until`**, saved weights-only
+    (~0.87 MB each). Log spacing straddles the transition — seed 0 groks between steps 5,000 and 6,000,
+    entirely inside the 4,297 → 7,506 gap — so the progress measures in Stage 3 need uniform resolution
+    through it. These are weights-only because restricted and excluded loss only run the model forward.
+
+  The baseline config uses 250 and 15,000, giving 81 checkpoints per seed (21 full + 60 weights-only,
+  ~107 MB per seed). Everything has settled well before step 15,000; the latest seed groks at 14,300.
+  Checkpoint saving does not touch training: recomputing train/test loss, accuracy and parameter norm
+  from all 320 checkpoints that land on the logged step grid reproduces the committed CSV rows exactly
+  (zero difference in every column, on the GPU that produced them).
 
 ### On Colab
 
-1. Run `python colab/make_bundle.py` to build `colab/grokking-dynamics.zip`.
-2. At colab.research.google.com, use File → Upload notebook → `colab/stage1_colab.ipynb`. Choose a T4 GPU runtime
-   and Run all, then upload the zip when asked.
-3. The last cell downloads `stage1_results.zip`. Unzip it into the repo root and move its `logs/` folder to
-   `results/01_baseline/colab_logs/`.
+1. Run `python colab/make_bundle.py` to build `colab/grokking-dynamics.zip`. The bundle includes the
+   committed CSVs in `results/`, which `regenerate_checkpoints.py` needs in order to verify anything.
+2. At colab.research.google.com, use File → Upload notebook. Choose a T4 GPU runtime and Run all, then
+   upload the zip when asked.
+   - `colab/stage1_colab.ipynb` trains the baseline and control from scratch and draws the figures.
+     Its last cell downloads `stage1_results.zip`; unzip it into the repo root and move its `logs/`
+     folder to `results/01_baseline/colab_logs/`.
+   - `colab/stage3_checkpoints.ipynb` re-runs the ten baseline seeds to produce the dense checkpoints,
+     re-verifying as it goes: it byte-compares the regenerated metrics against the committed CSVs, then
+     recomputes metrics from the saved checkpoints and compares those too. It downloads one zip per
+     seed, so a dropped download costs only that seed.
 
 ## Design decisions
 
