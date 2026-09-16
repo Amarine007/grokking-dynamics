@@ -1,0 +1,22 @@
+# Stage 2 (minimal add-on): is attention part of the algorithm or just a fixed router?
+# Analysis only -- reads the same final checkpoints as configs/fourier.yaml, never trains.
+
+source:
+  experiment: 01_baseline
+  config: baseline
+  step: 40000
+  seeds: 0-9
+
+analysis:
+  # The final-position query is constant by construction (same "=" token, no LayerNorm),
+  # so this is a check on the reasoning, not a tunable. Anything above it means the
+  # structural argument in src/attention.py is wrong and the rest needs re-planning.
+  max_query_spread: 1.0e-4
+  # Largest allowed dependence of the a-score on b (and vice versa), as a fraction of
+  # that score's own spread. Reported per seed either way; this only decides the verdict.
+  max_factorisation_error: 0.01
+
+runtime:
+  device: cpu
+  num_threads: 1
+  batch_size: 4096
