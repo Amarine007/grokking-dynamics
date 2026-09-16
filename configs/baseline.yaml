@@ -21,7 +21,13 @@ optim:
 train:
   num_steps: 40000
   log_every: 100
-  num_checkpoints: 20  # log-spaced in [1, num_steps], plus step 0
+  num_checkpoints: 20  # log-spaced in [1, num_steps], plus step 0; saved with optimizer state
+  # Dense analysis checkpoints for Stage 3. The log-spaced schedule straddles the grok:
+  # seed 0 jumps between steps 5000 and 6000, inside the 4297 -> 7506 gap. Everything has
+  # settled by ~15000 (latest grok is seed 9 at 14300), so density past that buys nothing.
+  # These extras are weights-only; saving checkpoints does not affect the training run.
+  checkpoint_every: 250
+  checkpoint_every_until: 15000
 
 runtime:
   device: cuda         # committed results were produced on a GPU (see results/*/ENVIRONMENT.txt)
