@@ -4,6 +4,32 @@ A small decoder-only transformer trained on modular addition mod 113, where the 
 
 The implementation replicates Nanda et al. 2023, [*Progress Measures for Grokking via Mechanistic Interpretability*](https://arxiv.org/abs/2301.05217): a 1-layer transformer with no LayerNorm, biases, or dropout, trained on (a + b) mod 113.
 
+## Summary
+
+All results are over 10 training seeds, which differ only in initialization.
+
+1. **Grokking reproduces, and weight decay drives it.** Training accuracy passes 99% by step 200 in every
+   seed; test accuracy passes 90% at a median step of 6,600 (range 4,800–14,300), about 33 times later.
+   With weight decay set to 0, the same model never generalizes in 40,000 steps.
+   ([Stage 1](#stage-1-results))
+2. **The model learns a Fourier algorithm on a handful of frequencies.** Each seed puts 90–99% of its
+   embedding on 4 or 5 frequencies, and a different set in every seed. Keeping only those frequencies in
+   the logits retains 98.5% of their variance at 100% test accuracy; removing them drops test accuracy to
+   2.6%. ([Stage 2](#stage-2-results))
+3. **The circuit is built long before test accuracy moves.** Measured with restricted and excluded loss
+   (Nanda et al.), the key frequencies alone beat chance on test pairs a median 5,750 steps before the full
+   model reaches 50% test accuracy, and themselves reach 50% a median 3,000 steps before it (a marker chosen
+   after seeing the curves). Phase boundaries were pre-registered: memorization
+   ends at steps 806–1,409 in every seed, while the transition that follows varies threefold.
+   ([Stage 3](#stage-3-results))
+4. **The main frequencies are chosen almost immediately; the last ones are not.** Initialization gives the
+   eventual frequencies a small, significant head start (p = 0.016). About three quarters of them lock in
+   within the first 462 steps; the remaining minor ones settle thousands of steps later, sometimes
+   replacing frequencies the model had been using. ([Stage 4](#stage-4-results-when-is-the-frequency-set-decided))
+
+**Where this departs from the paper:** restricted loss starts falling during memorization rather than after
+it, and cleanup is shorter. Neither is explained yet. Details and caveats are in each stage's section.
+
 ## Status
 
 | Stage | Goal | Status |
@@ -36,7 +62,7 @@ initialization. Runs were done on a Colab T4 GPU (versions in
 | Final test acc | 100% | 100% | 99.73% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
 
 Seed 2 settles at 99.73% (about 24 of 8,939 test pairs wrong) from step ~20,000 onward. This is stable, not a
-training instability; the misclassified pairs have not been examined yet.
+training instability. The misclassified pairs are examined in [Stage 2](#seed-2s-24-errors).
 
 ### Control: weight decay 0
 
@@ -74,6 +100,10 @@ seeds 1, 4 and 6), carrying **90.4% to 99.0%** of the squared norm. The threshol
 work: the largest *excluded* frequency is between 0.13% and 0.96% across seeds, so nothing sits ambiguously
 on the line, though seeds 2, 4 and 6 come closest (0.82–0.96%).
 
+These counts are for the embedding. The readout from neurons to logits uses **fewer** in five seeds: in
+seeds 0, 3, 5, 7 and 8 it carries at most 0.01% of its norm on one of the five embedding frequencies, so
+it effectively uses four (see [Stage 4](#stage-4-results-when-is-the-frequency-set-decided)).
+
 | Seed | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
 |---|---|---|---|---|---|---|---|---|---|---|
 | Key frequencies | 5 17 24 34 50 | 5 17 32 48 | 4 5 20 27 40 | 6 21 25 26 44 | 21 33 46 56 | 5 29 42 45 48 | 4 5 8 35 | 14 23 30 33 45 | 3 6 21 26 51 | 17 19 34 51 56 |
@@ -81,7 +111,8 @@ on the line, though seeds 2, 4 and 6 come closest (0.82–0.96%).
 
 **No two seeds choose the same set.** No frequency appears in all ten runs; the most common (k = 5) appears
 in five. Which frequencies a model uses is an initialization lottery — but *how many*, and the structure
-built on them, is not. The split is fixed across seeds, so this is caused by initialization alone.
+built on them, is not. The split is fixed across seeds, so this is caused by initialization alone. Stage 4 finds that
+initialization tilts the choice without deciding it.
 
 ### The logits are built out of those frequencies
 
