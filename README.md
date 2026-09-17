@@ -11,6 +11,7 @@ The implementation replicates Nanda et al. 2023, [*Progress Measures for Grokkin
 | 1 | Data, model, training: reproduce the grokking curve | **Done** |
 | 2 | Reverse-engineer the learned algorithm (Fourier analysis of weights and activations) | **Done** |
 | 3 | Progress measures (restricted / excluded loss) and the three training phases | **Done** |
+| 4 | When does each seed commit to its key frequencies? | **Done** |
 
 ## Stage 1 results
 
@@ -260,6 +261,82 @@ checkpoint in every seed. Cleanup is also
   restricted loss during memorization, and the phase timings differ. We have not re-derived the paper's
   per-run numbers.
 
+## Stage 4 results: when is the frequency set decided?
+
+**The question.** Every seed ends up using a different set of key frequencies (Stage 2), and those
+frequencies already carry useful signal a few hundred steps into training (Stage 3). So when is a seed's
+set decided? Is it already latent in the random initialization, chosen early, or settled only after other
+frequencies compete?
+
+The frequency spectrum of two matrices was tracked at every checkpoint: the embedding **W_E**, and the
+map from MLP neurons to logits, **W_L = W_out · W_U**. The tests, rules and their interpretation were
+written into [`configs/frequency_timing.yaml`](configs/frequency_timing.yaml) and committed before
+anything was computed. Two further analyses, chosen after seeing the results, are labelled **post hoc**.
+
+### Pre-registered results
+
+**1. There is a detectable, but small, head start at initialization.** At step 0, before any training,
+the frequencies a seed will eventually use already rank higher in its random embedding than chance. Pooled
+over all 47 key frequencies in 10 seeds, their mean rank is **23.6 of 56, against 28.5 ± 2.3 for random
+picks (one-sided permutation test, p = 0.016)**. The same test on W_L, the secondary matrix, gives 24.9
+(p = 0.057, not significant). Initialization tilts the odds; it does not decide the outcome. Only 14 of
+the 47 final frequencies start in the top ten.
+
+![Mean rank of the final key frequencies over training](figures/fig11_rank_by_step.png)
+
+**2. The exact final set usually settles late.** The rule "the top-n frequencies of W_E equal the final
+set at every later checkpoint" first holds during memorization in only 2 seeds (steps 151 and 151). In the
+other 8 it holds only at steps 6,500–40,000. For W_L the rule never holds in 5 seeds, and the reason is itself
+a finding. **In all five (seeds 0, 3, 5, 7, 8), the final W_L puts at most 0.01% of its norm on one of
+W_E's five key frequencies.** Its top five therefore includes a noise frequency and can never match. In
+other words, in 5 of the 7 seeds that Stage 2 counted as using five frequencies, the readout from neurons
+to logits uses only four. The fifth is in the embedding but not in the readout. This is a limit of the
+pre-registered rule, reported as it came out, and it qualifies the Stage 2 count.
+
+### Post hoc: a core set chosen in the first few hundred steps, and a late minor frequency
+
+![Rank of each final key frequency, seed 0](figures/fig09_frequency_ranks.png)
+
+The exact-set rule hides a two-tier pattern, visible once each frequency is tracked separately.
+
+- **Core frequencies, 35 of 47:** each one enters W_E's top n for good between **step 0 and step 462**,
+  before memorization ends in its seed. These are the major ones, with a median 24.9% of the final
+  embedding norm.
+- **Late frequencies, 12 of 47:** they lock in only between **steps 3,500 and 40,000**, which covers
+  circuit formation, cleanup and after. They are the minor ones, with a median 6.4% of the final norm; in
+  every case they are the 3rd-largest or smaller in their seed. Four of the 12 never lock into W_L's top n,
+  against 1 of the 35 core frequencies.
+
+In seed 0, frequencies 5, 17, 24 and 50 are in place by step 250. Frequency 34 ranks 55th of 56 at
+initialization, enters the top five only at step 6,500 (after the jump), and ends with 6% of the norm.
+The readout never uses it.
+
+![Lock-in step of every final key frequency](figures/fig10_lock_in.png)
+
+**Other frequencies do work during circuit formation, and are then replaced.** At each checkpoint, restricted
+loss was also computed with that checkpoint's *own* top-n frequencies instead of the final set. In 7 of 10
+seeds the own set gives **11–25 points higher restricted test accuracy** at some point during training.
+The frequency that is later abandoned is carrying real signal at that point. For example, seed 5 keeps
+frequency 24 in its top five until step 22,901 before frequency 29 replaces it; seed 9 keeps frequency 30
+until step 13,250, and frequency 51 is in place for good by step 22,901.
+
+### What this means, and caveats
+
+The main frequencies of the circuit are chosen almost immediately, from a starting position that slightly
+favours them. The last one or two slots stay open far longer, and the model replaces frequencies it has
+been using as late as cleanup.
+
+- The initialization effect is statistically detectable, not large. It rests on one pooled test over 10
+  seeds, the single test pre-registered as primary.
+- The core/late split, the frequency-share comparison and the own-set comparison were all chosen after
+  seeing results. They describe these 10 runs; they were not tested as hypotheses.
+- Past step 15,000 checkpoints are sparse (15,000 → 22,901 → 40,000). In seeds 5 and 6 the set first
+  matches at the final checkpoint, so it may have settled any time after 22,901.
+- "Top n by embedding norm" shows where the weight is, not what the model uses. The restricted-loss
+  comparison is the evidence that a non-final frequency was actually in use.
+- A causal test, such as planting chosen frequencies in the initialization and retraining, would need GPU
+  training and has not been run.
+
 ## Repository layout
 
 ```
@@ -270,6 +347,7 @@ src/train.py       full-batch training loop, CSV logging, checkpointing, determi
 src/fourier.py     Fourier basis, embedding DFT, neuron fits, Fourier-space ablation (Stage 2)
 src/attention.py   attention pattern factorisation and ablations (Stage 2)
 src/measures.py    restricted / excluded loss and pre-registered phase-boundary rules (Stage 3)
+src/frequency_timing.py  frequency ranks through training, lock-in rule, init permutation test (Stage 4)
 experiments/       one script per numbered experiment, plus regenerate_checkpoints.py
 results/           raw metrics as CSV (committed), environment record, run logs
 figures/           make_all.py regenerates every figure from results/ without retraining
@@ -305,6 +383,10 @@ python experiments/02_fourier.py --config configs/fourier.yaml
 # Stage 3 progress measures: every checkpoint of every seed, writes results/03_progress/.
 # CPU only, ~8 minutes; checks recomputed clean metrics against the Stage 1 CSVs first.
 python experiments/03_progress.py --config configs/progress.yaml
+
+# Stage 4 frequency timing: spectra of W_E and W_L at every checkpoint, writes results/04_frequency_timing/.
+# CPU only, ~10 minutes.
+python experiments/04_frequency_timing.py --config configs/frequency_timing.yaml
 
 # figures and milestone table, from committed CSVs only (no training)
 python figures/make_all.py
