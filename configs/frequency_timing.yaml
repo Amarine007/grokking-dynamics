@@ -1,0 +1,52 @@
+# Stage 4: when does each seed commit to its key frequencies?
+# Analysis only -- reads checkpoints produced by configs/baseline.yaml and never trains.
+#
+# PRE-REGISTERED: every definition, test and interpretation band below was fixed and
+# committed before any Stage 4 quantity had been computed.
+
+source:
+  experiment: 01_baseline
+  config: baseline
+  seeds: 0-9
+  # The "final set" for each seed: Stage 2's key frequencies of W_E at step 40,000.
+  # n = the seed's number of key frequencies (4 or 5) is used for every top-n below.
+  key_frequencies_csv: results/02_fourier/key_frequencies.csv
+  # Stage 3 phase boundaries, used only to name when a decision happened (bands below).
+  phases_csv: results/03_progress/phases.csv
+
+analysis:
+  # Matrices tracked. W_E is primary; W_L (= W_out @ W_U, the neuron-logit map) secondary.
+  matrices: [W_E, W_L]
+  #
+  # 1. Is the final set latent at initialization?
+  #    At step 0, pool the ranks of every seed's final key frequencies (rank 1 = most
+  #    squared norm, of 56) and compare their mean with random same-size subsets per seed.
+  #    One-sided permutation test. W_E is the primary test; W_L is reported as secondary.
+  init_test_draws: 100000
+  init_test_rng_seed: 0
+  alpha: 0.05
+  #    The same statistic at every later checkpoint is reported descriptively, with fewer
+  #    draws, and is not a hypothesis test.
+  per_checkpoint_draws: 10000
+  #
+  # 2. When is the set decided?
+  #    set_decided_step  = first checkpoint from which the top-n frequencies equal the final
+  #                        set at EVERY later checkpoint.
+  #    lock_in_step      = per final key frequency: first checkpoint from which it ranks
+  #                        within the top n at every later checkpoint.
+  #    Interpretation bands for set_decided_step (W_E), named in advance:
+  #      step 0                        -> "latent at initialization"
+  #      <= Stage 3 memorization_end   -> "decided during memorization"
+  #      >  Stage 3 memorization_end   -> "decided during circuit formation or later"
+  #
+  # 3. Were other frequencies used and abandoned?
+  #    At every checkpoint, restricted loss/accuracy (Stage 3 definition, `sum` variant,
+  #    test split) using that checkpoint's OWN top-n W_E frequencies, alongside Stage 3's
+  #    restricted loss with the final set. Own-set loss well below final-set loss at some
+  #    checkpoint would mean a circuit on non-final frequencies existed then.
+  #    Every frequency that ever enters a seed's top n without being final is listed.
+
+runtime:
+  device: cpu
+  num_threads: 1
+  batch_size: 4096
