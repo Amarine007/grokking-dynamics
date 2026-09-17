@@ -10,7 +10,7 @@ The implementation replicates Nanda et al. 2023, [*Progress Measures for Grokkin
 |---|---|---|
 | 1 | Data, model, training: reproduce the grokking curve | **Done** |
 | 2 | Reverse-engineer the learned algorithm (Fourier analysis of weights and activations) | **Done** |
-| 3 | Progress measures (restricted / excluded loss) and the three training phases | Not started |
+| 3 | Progress measures (restricted / excluded loss) and the three training phases | **Done** |
 
 ## Stage 1 results
 
@@ -167,11 +167,98 @@ a = b. The defect is localized in the circuit rather than spread over the input 
   the paper's exact per-run numbers for a quantitative comparison, so "matches" here means structural
   agreement, not a matched statistic.
 
-## Next stages
+## Stage 3 results
 
-- **Stage 3:** track restricted and excluded loss across training checkpoints, locate the memorization →
-  circuit-formation → cleanup phases for each seed, and test whether the circuit forms before the visible
-  test-accuracy jump.
+**The question.** Test accuracy sits near chance for thousands of steps and then jumps. Is the circuit
+being built during that plateau, invisibly? Two measures from Nanda et al. (Section 5.1) answer this at
+every checkpoint, using each seed's key frequencies from Stage 2:
+
+- **Restricted loss:** the loss when the logits keep *only* the constant term and the cos/sin(w_k(a + b))
+  terms at the key frequencies. Low means the circuit alone already gets answers right.
+- **Excluded loss:** the loss on training pairs when *only* those terms are removed. Rising means the
+  model has started relying on the circuit instead of memorized answers.
+
+All 81 checkpoints of all ten seeds were measured on CPU. Before any measure was trusted, the clean
+losses it recomputes were checked against the Stage 1 CSVs: at all 32 shared steps per seed they agree to
+within 5e-6 (relative), accuracies agree exactly, and the parameter norm is bit-identical.
+
+**Phase boundaries were pre-registered.** The paper places them by eye. Here the rules were written into
+[`configs/progress.yaml`](configs/progress.yaml) and committed before any measure had been computed:
+memorization ends at the minimum of excluded loss; cleanup starts when full-model test loss drops below
+ln 113 (a uniform guess); cleanup ends at 99% test accuracy.
+
+### The circuit is built long before test accuracy moves
+
+![Progress measures for seed 0](figures/fig06_progress_measures.png)
+
+In seed 0, the key frequencies alone reach **30% test accuracy by step 1,000 and 99% by step 5,000**. At
+those same steps the full model is at 3% and 35%. The memorized part of the network is hiding a circuit
+that already generalizes. Before the jump, restricted loss on test pairs stays within 25% of its value
+on training pairs, which is what a general algorithm looks like, not memorization. Meanwhile excluded loss bottoms out at step
+1,250 and then climbs by more than four orders of magnitude before the jump, as the model shifts its
+training-set performance onto the circuit.
+
+![Progress measures, all seeds](figures/fig07_progress_all_seeds.png)
+
+The same shape appears in every seed. From memorization end to cleanup start, excluded loss rises
+**1,100x to 600,000x**.
+
+### Phase boundaries per seed
+
+![Phase timeline](figures/fig08_phase_timeline.png)
+
+| Seed | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | Median (range) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Memorization ends | 1250 | 806 | 1250 | 1000 | 1409 | 1000 | 1409 | 806 | 1250 | 806 | 1125 (806–1409) |
+| Cleanup starts | 5250 | 4500 | 5250 | 5000 | 8000 | 4500 | 7500 | 7500 | 6500 | 13750 | 5875 (4500–13750) |
+| Cleanup ends | 6000 | 5750 | 7250 | 5750 | 9250 | 5250 | 9750 | 8500 | 7250 | 15000 | 7250 (5250–15000) |
+
+Steps are checkpoint steps, resolved to 250 through step 15,000. **Memorization ends between steps 806 and
+1,409 in every seed; when the circuit takes over varies threefold**, and seed 9 is the outlier, as in
+Stage 1. For comparison, the paper reports 0–1.4k / 1.4k–9.4k / 9.4k–14k for its main run.
+
+### Does restricted loss improve before the visible jump? Yes, by thousands of steps
+
+| Marker | Step (median, range) | Lead over the jump to 50% test accuracy |
+|---|---|---|
+| Restricted test loss drops below ln 113 (pre-registered) | 250 (87–462) | **5,750 steps** (4,250–13,599) |
+| Restricted test accuracy reaches 50% (post hoc) | 1,750–6,500 | **3,000 steps** (2,040–7,250) |
+
+The pre-registered marker fires almost as soon as training starts, so its lead mostly restates when the
+jump happens. The second marker is more informative, but it was chosen **after** seeing the curves and is
+labelled as such. When it fires, the full model's test accuracy is still only 4–20%.
+
+### Where this differs from the paper, and caveats
+
+- **Restricted loss does not stay high during memorization.** The paper describes it that way. Here it
+  drops below chance within the first 87–462 steps, and from there to the jump it decreases at every
+checkpoint in every seed. Cleanup is also
+  shorter than in the paper (750–2,250 steps). We report this, not explain it. Candidate causes include the
+  deviations listed under Design decisions (no warmup, p + 1 outputs), but none has been tested.
+- **"20 terms" is ambiguous in the paper.** Section 5.1 names only cos/sin(w_k(a + b)) but counts four
+  2D terms per frequency, which would also include a − b terms. Both readings were computed (`_products`
+  columns). The broader reading shifts memorization end 0–250 steps earlier and leaves the restricted-loss
+  marker in the same 87–462 range. No conclusion changes.
+- **Key frequencies come from the final model** (Stage 2, from W_E) and are applied at every checkpoint,
+  as the paper does, though its extra seeds took them from W_L. A circuit built on frequencies the final
+  model later abandoned would be invisible to these measures.
+- **Two boundary rules pick the same checkpoint.** "Test loss below ln 113" and "test accuracy reaches
+  50%" land on the same step in 9 of 10 seeds (seed 2: 5,250 vs 5,500), so they are not independent
+  evidence.
+- Gini coefficients, the paper's third measure, were not computed; the spec asked only for restricted and
+  excluded loss.
+
+### Verification
+
+- **Phase boundaries per seed and spread:** table above. Memorization end is 806–1,409, cleanup start is
+  4,500–13,750, and cleanup end is 5,250–15,000.
+- **Does restricted loss improve before the visible test-accuracy jump?** Yes, in all ten seeds.
+  Restricted test loss drops below chance a median **5,750 steps** before test accuracy reaches 50%
+  (pre-registered). Restricted accuracy reaches 50% a median **3,000 steps** before it (post hoc).
+- **Matches the paper?** Qualitatively, the central claim holds: the circuit forms well before grokking,
+  and excluded loss rises as memorization is replaced. It does not match the paper's description of
+  restricted loss during memorization, and the phase timings differ. We have not re-derived the paper's
+  per-run numbers.
 
 ## Repository layout
 
@@ -181,6 +268,8 @@ src/data.py        dataset and seeded train/test split
 src/model.py       from-scratch transformer + to_hooked_transformer() (TransformerLens port)
 src/train.py       full-batch training loop, CSV logging, checkpointing, determinism settings
 src/fourier.py     Fourier basis, embedding DFT, neuron fits, Fourier-space ablation (Stage 2)
+src/attention.py   attention pattern factorisation and ablations (Stage 2)
+src/measures.py    restricted / excluded loss and pre-registered phase-boundary rules (Stage 3)
 experiments/       one script per numbered experiment, plus regenerate_checkpoints.py
 results/           raw metrics as CSV (committed), environment record, run logs
 figures/           make_all.py regenerates every figure from results/ without retraining
@@ -212,6 +301,10 @@ python experiments/01_baseline.py --config configs/baseline_wd0.yaml --seed 0
 # Stage 2 Fourier analysis: reads the final checkpoint of each seed, writes results/02_fourier/.
 # CPU only, a few minutes; needs checkpoints on disk (see regenerate_checkpoints.py below).
 python experiments/02_fourier.py --config configs/fourier.yaml
+
+# Stage 3 progress measures: every checkpoint of every seed, writes results/03_progress/.
+# CPU only, ~8 minutes; checks recomputed clean metrics against the Stage 1 CSVs first.
+python experiments/03_progress.py --config configs/progress.yaml
 
 # figures and milestone table, from committed CSVs only (no training)
 python figures/make_all.py
