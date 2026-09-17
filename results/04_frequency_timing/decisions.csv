@@ -1,0 +1,11 @@
+seed,n_key,final_set,memorization_end,set_decided_W_E,band_W_E,set_decided_W_L,band_W_L
+0,5,5 17 24 34 50,1250,6500,decided during circuit formation or later,,not settled by the last checkpoint
+1,4,5 17 32 48,806,151,decided during memorization,750,decided during memorization
+2,5,4 5 20 27 40,1250,11500,decided during circuit formation or later,11500,decided during circuit formation or later
+3,5,6 21 25 26 44,1000,151,decided during memorization,,not settled by the last checkpoint
+4,4,21 33 46 56,1409,7250,decided during circuit formation or later,5000,decided during circuit formation or later
+5,5,5 29 42 45 48,1000,40000,decided during circuit formation or later,,not settled by the last checkpoint
+6,4,4 5 8 35,1409,40000,decided during circuit formation or later,40000,decided during circuit formation or later
+7,5,14 23 30 33 45,806,9250,decided during circuit formation or later,,not settled by the last checkpoint
+8,5,3 6 21 26 51,1250,8250,decided during circuit formation or later,,not settled by the last checkpoint
+9,5,17 19 34 51 56,806,22901,decided during circuit formation or later,22901,decided during circuit formation or later
