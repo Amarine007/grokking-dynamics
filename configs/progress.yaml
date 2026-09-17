@@ -1,0 +1,45 @@
+# Stage 3: restricted and excluded loss through training, and the phases of grokking.
+# Analysis only -- reads checkpoints produced by configs/baseline.yaml and never trains.
+#
+# PRE-REGISTERED: every rule below was fixed and committed before any progress measure
+# had been computed, so none of them was chosen to make the phases come out cleanly.
+
+source:
+  experiment: 01_baseline
+  config: baseline       # checkpoints/01_baseline/baseline_seed{k}/stepNNNNNN.pt
+  seeds: 0-9
+  # Key frequencies are the final model's, from Stage 2 (1% of W_E's squared norm at step
+  # 40,000). The paper also fixes them from the trained model and applies them throughout.
+  key_frequencies_csv: results/02_fourier/key_frequencies.csv
+
+measures:
+  # Every checkpoint on disk is used: 81 per seed (dense every 250 steps to 15,000, then
+  # log-spaced). Phase boundaries are therefore resolved to 250 steps before 15,000 and
+  # only coarsely after it (15,000 -> 22,901 -> 40,000).
+  #
+  # Clean train/test losses recomputed here must match the Stage 1 CSV rows at the same
+  # step. The CSVs came from a T4 GPU and this runs on CPU, so agreement is to within
+  # these tolerances, not bitwise. A mismatch aborts the run.
+  check_loss_rel_tol: 1.0e-4
+  check_acc_abs_tol: 1.0e-3
+
+phases:
+  # Boundary rules (implemented in src/measures.py:phase_boundaries). ln(p) is the loss
+  # of guessing uniformly over the p answers.
+  #   memorization_end         = step of MINIMUM excluded loss on train
+  #   cleanup_start            = first step with full-model test loss < ln(p)
+  #   cleanup_end              = first step with test accuracy >= cleanup_end_test_acc
+  #   restricted_peak          = step of MAXIMUM restricted loss on restricted_split
+  #   restricted_beats_uniform = first step with restricted loss on restricted_split < ln(p)
+  #   test_acc_jump            = first step with test accuracy >= jump_test_acc
+  # The headline "lead" is test_acc_jump minus restricted_beats_uniform: how many steps
+  # before the visible jump the key frequencies ALONE already beat chance on unseen pairs.
+  restricted_split: test
+  cleanup_end_test_acc: 0.99
+  jump_test_acc: 0.5
+  reference_seed: 0      # the seed plotted in full detail
+
+runtime:
+  device: cpu
+  num_threads: 1
+  batch_size: 4096
