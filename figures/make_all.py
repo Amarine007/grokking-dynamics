@@ -29,6 +29,7 @@ RESULTS = ROOT / "results"
 EXP01 = "01_baseline"
 EXP02 = "02_fourier"
 EXP03 = "03_progress"
+EXP04 = "04_frequency_timing"
 
 # Reference data-viz palette: categorical slots 1-2 plus chart chrome and ink.
 TRAIN, TEST = "#2a78d6", "#eb6834"
@@ -508,6 +509,154 @@ def print_stage3(phases: list[dict]) -> None:
               f"(n={len(v)})")
 
 
+# Stage 4: up to five final key frequencies per seed take categorical slots 1-5 in
+# ascending frequency order (validated as a 5-slot set; slots 3-5 are under 3:1 on the
+# surface, so every line is direct-labelled).
+CATEGORICAL = [TRAIN, TEST, RESTRICTED, EXCLUDED, "#e87ba4"]
+
+
+def fig_frequency_ranks(timing_spectra: list[dict], decisions: list[dict], phases: list[dict],
+                        seed: int, out: Path) -> None:
+    """Rank of each final key frequency in W_E and W_L over training, for one seed."""
+    dec = next(r for r in decisions if int(r["seed"]) == seed)
+    final = [int(k) for k in dec["final_set"].split()]
+    n = len(final)
+    ph = next(r for r in phases if int(r["seed"]) == seed)
+    fig, axes = plt.subplots(1, 2, figsize=(10.4, 4.4), sharey=True, layout="constrained")
+    for ax, m, title in [(axes[0], "W_E", "Embedding W_E"), (axes[1], "W_L", "Neuron-logit map W_L")]:
+        rows = sorted((r for r in timing_spectra if int(r["seed"]) == seed and r["matrix"] == m),
+                      key=lambda r: int(r["step"]))
+        steps = np.array([int(r["step"]) for r in rows])
+        keep = steps > 0
+        rank = {k: [] for k in final}
+        for r in rows:
+            vals = np.array([float(r[f"f{k}"]) for k in range(1, 57)])
+            order = sorted(range(56), key=lambda i: (-vals[i], i))
+            pos = {i + 1: j + 1 for j, i in enumerate(order)}
+            for k in final:
+                rank[k].append(pos[k])
+        ax.axhspan(0.5, n + 0.5, color=GRID, alpha=0.6, linewidth=0, zorder=0, label=f"Top {n}")
+        # Final ranks sit one apart, too close for end labels, so identity goes in a legend.
+        for color, k in zip(CATEGORICAL, final):
+            ax.plot(steps[keep], np.array(rank[k])[keep], color=color, linewidth=1.5, label=f"k = {k}")
+        for key, label in (("memorization_end", "memorization ends"), ("test_acc_jump", "test acc 50%")):
+            x = int(ph[key])
+            ax.axvline(x, color=AXIS, linewidth=0.9, linestyle=(0, (3, 2)), zorder=0)
+            ax.annotate(label, xy=(x, 56), xytext=(3, 0), textcoords="offset points", va="bottom",
+                        ha="left", color=MUTED, fontsize=8, rotation=90)
+        ax.set_xscale("log")
+        ax.set_xlim(1, steps[-1] * 1.5)
+        ax.set_ylim(57, 0)
+        ax.set_xlabel("Training step (log scale)")
+        decided = dec[f"set_decided_{m}"]
+        ax.set_title(f"{title}: set decided at step {decided}" if decided else f"{title}: exact set never matches")
+    axes[0].set_ylabel("Rank among 56 frequencies (1 = most norm)")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="outside lower center", ncol=len(labels), fontsize=8)
+    fig.suptitle(f"Seed {seed}: where the final key frequencies rank through training",
+                 x=0.01, ha="left", color=INK, fontweight="semibold")
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+
+
+def fig_lock_in(lock_in: list[dict], phases: list[dict], out: Path) -> None:
+    """Per seed, the step each final key frequency enters W_E's top n for good."""
+    rows = [r for r in lock_in if r["matrix"] == "W_E"]
+    seeds = sorted({int(r["seed"]) for r in rows})
+    fig, ax = plt.subplots(figsize=(8.6, 0.36 * len(seeds) + 1.5), layout="constrained")
+    for i, seed in enumerate(seeds):
+        ph = next(r for r in phases if int(r["seed"]) == seed)
+        ax.plot([int(ph["memorization_end"])], [i], marker="|", markersize=14, color=INK_2, linestyle="none",
+                label="Memorization ends (Stage 3)" if i == 0 else None)
+        ax.plot([int(ph["test_acc_jump"])], [i], marker="|", markersize=14, color=TEST, linestyle="none",
+                label="Test accuracy reaches 50%" if i == 0 else None)
+        steps = [max(int(r["lock_in_step"]), 1) for r in rows if int(r["seed"]) == seed]
+        # Frequencies locking in at the same checkpoint are offset vertically, not stacked.
+        seen: dict[int, int] = {}
+        ys = []
+        for x in steps:
+            ys.append(i + 0.18 * seen.get(x, 0))
+            seen[x] = seen.get(x, 0) + 1
+        ax.plot(steps, ys, marker="o", markersize=6, color=TRAIN, linestyle="none",
+                markeredgecolor=SURFACE, markeredgewidth=1.2,
+                label="A final key frequency locks into W_E's top n" if i == 0 else None)
+    ax.set_xscale("log")
+    ax.set_xlim(0.8, 60000)
+    ax.set_yticks(range(len(seeds)))
+    ax.set_yticklabels([f"Seed {s}" for s in seeds])
+    ax.invert_yaxis()
+    ax.grid(axis="y", visible=False)
+    ax.set_xlabel("Training step (log scale; step 0 drawn at 1)")
+    ax.set_title("When each final key frequency locks in")
+    fig.legend(loc="outside lower center", ncol=3, fontsize=8)
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+
+
+def fig_rank_by_step(rows: list[dict], init: list[dict], out: Path) -> None:
+    """Mean rank of the final key frequencies over all seeds, against random subsets."""
+    fig, ax = plt.subplots(figsize=(8.0, 4.2), layout="constrained")
+    for m, color, name in (("W_E", TRAIN, "Embedding W_E"), ("W_L", TEST, "Neuron-logit map W_L")):
+        rr = sorted((r for r in rows if r["matrix"] == m), key=lambda r: int(r["step"]))
+        steps = np.array([int(r["step"]) for r in rr])
+        keep = steps > 0
+        obs = np.array([float(r["observed_mean_rank"]) for r in rr])
+        ax.plot(steps[keep], obs[keep], color=color, label=name)
+        ax.annotate(name, xy=(steps[-1], obs[-1]), xytext=(5, 0), textcoords="offset points",
+                    va="center", color=INK_2, fontsize=8)
+    rr = sorted((r for r in rows if r["matrix"] == "W_E"), key=lambda r: int(r["step"]))
+    steps = np.array([int(r["step"]) for r in rr])
+    null = np.array([float(r["null_mean_rank"]) for r in rr])
+    sd = np.array([float(r["null_sd"]) for r in rr])
+    keep = steps > 0
+    ax.fill_between(steps[keep], (null - 2 * sd)[keep], (null + 2 * sd)[keep], color=MUTED, alpha=0.15,
+                    linewidth=0, label="Random frequencies, ±2 SD")
+    ax.set_xscale("log")
+    ax.set_xlim(1, steps[-1] * 4)
+    ax.set_ylim(57, 0)
+    ax.set_xlabel("Training step (log scale)")
+    ax.set_ylabel("Mean rank of final key frequencies")
+    e = next(r for r in init if r["matrix"] == "W_E")
+    ax.set_title(f"Pooled over seeds: at initialization the final frequencies rank {float(e['observed_mean_rank']):.1f} "
+                 f"on average (random: {float(e['null_mean_rank']):.1f}, p = {float(e['p_value']):.2g})")
+    ax.legend(loc="lower left")
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+
+
+def print_stage4(decisions: list[dict], init: list[dict], lock_in: list[dict], timing: list[dict],
+                 measures: list[dict], spectrum: list[dict]) -> None:
+    print("\nStage 4, PRE-REGISTERED: initialization test and set-decided step")
+    for r in init:
+        print(f"  {r['matrix']} (primary={r['primary']}): mean rank {float(r['observed_mean_rank']):.2f} "
+              f"vs random {float(r['null_mean_rank']):.2f} (sd {float(r['null_sd']):.2f}), "
+              f"p = {float(r['p_value']):.3g}, n = {r['n_frequencies']}")
+    for r in decisions:
+        print(f"  seed {r['seed']}: W_E {r['set_decided_W_E'] or '-':>6} ({r['band_W_E']});  "
+              f"W_L {r['set_decided_W_L'] or '-':>6} ({r['band_W_L']})")
+
+    print("\nStage 4, POST HOC: early vs late lock-in (W_E), split at Stage 3 memorization end")
+    mem = {r["seed"]: int(r["memorization_end"]) for r in decisions}
+    share = {(r["seed"], r["frequency"]): float(r["fraction"]) for r in spectrum}
+    wl = {(r["seed"], r["frequency"]): r["lock_in_step"] for r in lock_in if r["matrix"] == "W_L"}
+    we = [r for r in lock_in if r["matrix"] == "W_E"]
+    for name, group in (("early", [r for r in we if int(r["lock_in_step"]) <= mem[r["seed"]]]),
+                        ("late", [r for r in we if int(r["lock_in_step"]) > mem[r["seed"]]])):
+        steps = [int(r["lock_in_step"]) for r in group]
+        shares = [share[(r["seed"], r["frequency"])] for r in group]
+        never = sum(wl[(r["seed"], r["frequency"])] == "" for r in group)
+        print(f"  {name:>5}: {len(group)} of {len(we)} frequencies, lock-in steps {min(steps)}-{max(steps)}, "
+              f"final W_E share median {np.median(shares):.1%} ({min(shares):.1%}-{max(shares):.1%}), "
+              f"mean init rank {np.mean([int(r['rank_at_init']) for r in group]):.1f}, never lock in W_L: {never}")
+
+    print("\nStage 4, POST HOC: restricted test accuracy with own top-n set minus with final set (max over steps)")
+    final_acc = {(r["seed"], r["step"]): float(r["restricted_acc_test"]) for r in measures}
+    for seed in sorted({r["seed"] for r in timing}, key=int):
+        best = max((float(r["restricted_acc_test_own"]) - final_acc[(seed, r["step"])], int(r["step"]), r["top_W_E"])
+                   for r in timing if r["seed"] == seed)
+        print(f"  seed {seed}: {best[0]:+.3f} at step {best[1]} (own set {best[2]})")
+
+
 def main() -> None:
     set_style()
     p = load_config(ROOT / "configs" / "baseline.yaml")["data"]["p"]
@@ -552,6 +701,18 @@ def main() -> None:
         fig_phase_timeline(phases, max(int(r["step"]) for r in measures), FIG_DIR / "fig08_phase_timeline.png")
         print_stage3(phases)
         print_stage3_post_hoc(measures, phases)
+
+        timing_dir = RESULTS / EXP04
+        if (timing_dir / "decisions.csv").exists():
+            decisions = read_rows(timing_dir / "decisions.csv")
+            fig_frequency_ranks(read_rows(timing_dir / "spectra.csv"), decisions, phases, ref,
+                                FIG_DIR / "fig09_frequency_ranks.png")
+            fig_lock_in(read_rows(timing_dir / "lock_in.csv"), phases, FIG_DIR / "fig10_lock_in.png")
+            fig_rank_by_step(read_rows(timing_dir / "rank_by_step.csv"), read_rows(timing_dir / "init_test.csv"),
+                             FIG_DIR / "fig11_rank_by_step.png")
+            print_stage4(decisions, read_rows(timing_dir / "init_test.csv"), read_rows(timing_dir / "lock_in.csv"),
+                         read_rows(timing_dir / "timing.csv"), measures,
+                         read_rows(RESULTS / EXP02 / "embedding_spectrum.csv"))
 
 
 if __name__ == "__main__":
