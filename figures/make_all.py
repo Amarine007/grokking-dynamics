@@ -28,6 +28,7 @@ FIG_DIR = ROOT / "figures"
 RESULTS = ROOT / "results"
 EXP01 = "01_baseline"
 EXP02 = "02_fourier"
+EXP03 = "03_progress"
 
 # Reference data-viz palette: categorical slots 1-2 plus chart chrome and ink.
 TRAIN, TEST = "#2a78d6", "#eb6834"
@@ -321,6 +322,192 @@ def print_stage2(key_rows: list[dict], ablation: list[dict], neurons: list[dict]
               f"{neu['n_single_explained']:>6} / {neu['n_neurons']:<5}")
 
 
+# Stage 3 series take categorical slots 3-4 after train/test (validated as a 4-slot set;
+# aqua and yellow are under 3:1 on the surface, so every line is also direct-labelled
+# and the two measures are dashed).
+RESTRICTED, EXCLUDED = "#1baf7a", "#eda100"
+PHASES = [("memorization_end", "Memorization"), ("cleanup_start", "Circuit formation"),
+          ("cleanup_end", "Cleanup")]
+
+
+def seed_series(rows: list[dict], seed: int, cols: list[str]) -> dict[str, np.ndarray]:
+    rows = [r for r in rows if int(r["seed"]) == seed]
+    out = {c: np.array([float(r[c]) for r in rows]) for c in cols}
+    out["step"] = np.array([int(r["step"]) for r in rows])
+    return out
+
+
+def _boundaries(ax, phase: dict, label: bool) -> None:
+    """Vertical lines at the pre-registered phase boundaries; phase names above the plot."""
+    edges = [1] + [int(phase[k]) for k, _ in PHASES if phase[k] not in ("", None)]
+    for x in edges[1:]:
+        ax.axvline(x, color=AXIS, linewidth=0.9, linestyle=(0, (3, 2)), zorder=0)
+    if not label:
+        return
+    names = [n for _, n in PHASES][: len(edges)] + ["Stable"]
+    right = [*edges[1:], None]
+    for i, (left, r, name) in enumerate(zip(edges, right, names)):
+        mid = np.sqrt(left * r) if r else left * 2.2
+        # Alternate two rows: cleanup is narrow on a log axis, so neighbours would collide.
+        ax.annotate(name, xy=(mid, 1.0), xycoords=("data", "axes fraction"), xytext=(0, 3 + 11 * (i % 2)),
+                    textcoords="offset points", ha="center" if r else "left", va="bottom",
+                    color=MUTED, fontsize=8)
+
+
+def _end_label(ax, x: np.ndarray, y: np.ndarray, text: str, dy: float = 0) -> None:
+    ax.annotate(text, xy=(x[-1], y[-1]), xytext=(5, dy), textcoords="offset points",
+                va="center", ha="left", color=INK_2, fontsize=8)
+
+
+def fig_progress_measures(rows: list[dict], phases: list[dict], seed: int, p: int, out: Path) -> None:
+    """Both measures against train/test for one seed: losses above, accuracies below."""
+    cols = ["train_loss", "test_loss", "restricted_loss_test", "excluded_loss_train",
+            "train_acc", "test_acc", "restricted_acc_test", "excluded_acc_train"]
+    s = seed_series(rows, seed, cols)
+    ph = next(r for r in phases if int(r["seed"]) == seed)
+    keep = s["step"] > 0
+    x = s["step"][keep]
+    series = [("train", TRAIN, "-", "Train"), ("test", TEST, "-", "Test"),
+              ("restricted_{}_test", RESTRICTED, (0, (5, 2)), "Restricted (test)"),
+              ("excluded_{}_train", EXCLUDED, (0, (5, 2)), "Excluded (train)")]
+
+    fig, (a_loss, a_acc) = plt.subplots(2, 1, figsize=(8.6, 7.0), sharex=True, layout="constrained")
+    floor = 1e-9  # log axis; the smallest real loss here is ~2e-8
+    ends = {"Train": 0, "Test": 9, "Restricted (test)": -10, "Excluded (train)": 0}
+    for key, color, ls, name in series:
+        col = f"{key}_loss" if "{}" not in key else key.format("loss")
+        y = np.maximum(s[col][keep], floor)
+        a_loss.plot(x, y, color=color, linestyle=ls, label=name)
+        _end_label(a_loss, x, y, name, ends[name])
+        col = f"{key}_acc" if "{}" not in key else key.format("acc")
+        a_acc.plot(x, s[col][keep], color=color, linestyle=ls, label=name)
+    a_loss.axhline(np.log(p), color=MUTED, linewidth=0.8)
+    a_loss.annotate(f"uniform guess, ln {p}", xy=(x[0], np.log(p)), xytext=(4, 4),
+                    textcoords="offset points", color=MUTED, fontsize=8)
+    a_loss.set_yscale("log")
+    a_loss.set_ylim(floor, 100)
+    a_loss.set_ylabel("Cross-entropy loss (log scale)")
+    a_acc.axhline(1 / p, color=MUTED, linewidth=0.8)
+    a_acc.set_ylim(0, 1.02)
+    a_acc.yaxis.set_major_formatter(PercentFormatter(1.0))
+    a_acc.set_ylabel("Accuracy")
+    a_acc.legend(loc="center left")
+    for ax, label in ((a_loss, True), (a_acc, False)):
+        _boundaries(ax, ph, label)
+        ax.set_xscale("log")
+        ax.set_xlim(1, s["step"][-1] * 4)  # right margin for the end labels
+    a_acc.set_xlabel("Training step (log scale)")
+    fig.suptitle(
+        f"Progress measures, seed {seed}: the key frequencies alone beat chance on test pairs by step "
+        f"{ph['restricted_beats_uniform']},\n{ph['lead_restricted_beats_uniform']} steps before the full "
+        f"model's test accuracy reaches 50%", x=0.01, ha="left", color=INK, fontweight="semibold", fontsize=10)
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+
+
+def fig_progress_all_seeds(rows: list[dict], phases: list[dict], p: int, out: Path) -> None:
+    """Small multiples: test loss and both measures for every seed, same axes."""
+    seeds = sorted({int(r["seed"]) for r in rows})
+    ncol = 5
+    nrow = int(np.ceil(len(seeds) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(12.0, 2.6 * nrow + 0.6), sharex=True, sharey=True,
+                             layout="constrained", squeeze=False)
+    cols = ["test_loss", "restricted_loss_test", "excluded_loss_train"]
+    floor = 1e-9
+    for ax, seed in zip(axes.flat, seeds):
+        s = seed_series(rows, seed, cols)
+        keep = s["step"] > 0
+        x = s["step"][keep]
+        for col, color, ls, name in [("test_loss", TEST, "-", "Test loss"),
+                                     ("restricted_loss_test", RESTRICTED, (0, (5, 2)), "Restricted loss (test)"),
+                                     ("excluded_loss_train", EXCLUDED, (0, (5, 2)), "Excluded loss (train)")]:
+            ax.plot(x, np.maximum(s[col][keep], floor), color=color, linestyle=ls, linewidth=1.3, label=name)
+        ax.axhline(np.log(p), color=MUTED, linewidth=0.7)
+        _boundaries(ax, next(r for r in phases if int(r["seed"]) == seed), label=False)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlim(1, s["step"][-1])
+        ax.set_ylim(floor, 100)
+        ax.set_title(f"Seed {seed}")
+    for ax in axes.flat[len(seeds):]:
+        ax.set_visible(False)
+    for ax in axes[-1]:
+        ax.set_xlabel("Step (log)")
+    for ax in axes[:, 0]:
+        ax.set_ylabel("Loss (log)")
+    handles, labels = axes.flat[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="outside lower center", ncol=3)
+    fig.suptitle("Every seed: restricted loss sits below ln p while test loss is still far above it, and "
+                 "excluded loss climbs before the jump (dashed grey: pre-registered phase boundaries; solid grey: ln p)",
+                 x=0.01, ha="left", color=INK, fontweight="semibold", fontsize=10)
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+
+
+def fig_phase_timeline(phases: list[dict], last_step: int, out: Path) -> None:
+    """Each seed's phases as one horizontal bar on a log step axis."""
+    seeds = [int(r["seed"]) for r in phases]
+    # Ordinal: one hue, light to dark, in phase order.
+    shades = [SEQ_BLUE[2], SEQ_BLUE[6], SEQ_BLUE[10], GRID]
+    names = ["Memorization", "Circuit formation", "Cleanup", "Stable"]
+    fig, ax = plt.subplots(figsize=(8.6, 0.34 * len(seeds) + 1.4), layout="constrained")
+    for i, r in enumerate(phases):
+        edges = [1, int(r["memorization_end"]), int(r["cleanup_start"]),
+                 int(r["cleanup_end"]) if r["cleanup_end"] else last_step, last_step]
+        for j in range(4):
+            if edges[j + 1] > edges[j]:
+                ax.barh(i, edges[j + 1] - edges[j], left=edges[j], height=0.55, color=shades[j],
+                        edgecolor=SURFACE, linewidth=2, label=names[j] if i == 0 else None)
+        ax.plot(int(r["restricted_beats_uniform"]), i, marker="o", markersize=5, color=INK,
+                linestyle="none", label="Restricted loss beats ln p (test)" if i == 0 else None)
+    ax.set_xscale("log")
+    ax.set_xlim(1, last_step)
+    ax.set_yticks(range(len(seeds)))
+    ax.set_yticklabels([f"Seed {s}" for s in seeds])
+    ax.invert_yaxis()
+    ax.grid(axis="y", visible=False)
+    ax.set_xlabel("Training step (log scale)")
+    ax.set_title("Pre-registered phase boundaries per seed")
+    fig.legend(loc="outside lower center", ncol=5, fontsize=8)
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+
+
+def print_stage3_post_hoc(measures: list[dict], phases: list[dict]) -> None:
+    """Descriptive numbers chosen AFTER seeing the curves, kept apart from the pre-registered ones.
+
+    The pre-registered restricted-loss rule (beats ln p) fires almost immediately, so it
+    says little beyond "right after memorization". Restricted test accuracy reaching 50%
+    is a more demanding marker; it is reported here, labelled post hoc.
+    """
+    print("\nStage 3, POST HOC (not pre-registered): restricted test accuracy >= 50%")
+    print(f"{'seed':>4}  {'step':>6}  {'full test acc then':>18}  {'lead to jump':>12}  {'excl. loss rise':>15}")
+    leads = []
+    for ph in phases:
+        seed = int(ph["seed"])
+        rows = [r for r in measures if int(r["seed"]) == seed]
+        hit = next(r for r in rows if float(r["restricted_acc_test"]) >= 0.5)
+        excl = {int(r["step"]): float(r["excluded_loss_train"]) for r in rows}
+        rise = excl[int(ph["cleanup_start"])] / excl[int(ph["memorization_end"])]
+        lead = int(ph["test_acc_jump"]) - int(hit["step"])
+        leads.append(lead)
+        print(f"{seed:>4}  {hit['step']:>6}  {float(hit['test_acc']):>17.1%}  {lead:>12}  {rise:>14.0f}x")
+    print(f"  lead median {np.median(leads):.0f}, min {min(leads)}, max {max(leads)}")
+
+
+def print_stage3(phases: list[dict]) -> None:
+    keys = ["memorization_end", "cleanup_start", "cleanup_end", "restricted_beats_uniform",
+            "restricted_peak", "test_acc_jump", "lead_restricted_beats_uniform"]
+    print("\nStage 3: pre-registered phase boundaries (checkpoint steps)")
+    print(f"{'seed':>4}  " + "  ".join(f"{k[:14]:>14}" for k in keys))
+    for r in phases:
+        print(f"{r['seed']:>4}  " + "  ".join(f"{r[k]:>14}" for k in keys))
+    for k in keys:
+        v = np.array([float(r[k]) for r in phases if r[k] not in ("", None)])
+        print(f"  {k:<30} median {np.median(v):>7.0f}  min {v.min():>6.0f}  max {v.max():>6.0f}  "
+              f"(n={len(v)})")
+
+
 def main() -> None:
     set_style()
     p = load_config(ROOT / "configs" / "baseline.yaml")["data"]["p"]
@@ -354,6 +541,17 @@ def main() -> None:
                                p, FIG_DIR / "fig04_neuron_heatmap.png")
         fig_ablation(ablation, FIG_DIR / "fig05_ablation.png")
         print_stage2(keys, ablation, read_rows(RESULTS / EXP02 / "neuron_summary.csv"))
+
+    measures_path = RESULTS / EXP03 / "measures.csv"
+    if measures_path.exists():
+        ref = int(load_config(ROOT / "configs" / "progress.yaml")["phases"]["reference_seed"])
+        measures = read_rows(measures_path)
+        phases = read_rows(RESULTS / EXP03 / "phases.csv")
+        fig_progress_measures(measures, phases, ref, p, FIG_DIR / "fig06_progress_measures.png")
+        fig_progress_all_seeds(measures, phases, p, FIG_DIR / "fig07_progress_all_seeds.png")
+        fig_phase_timeline(phases, max(int(r["step"]) for r in measures), FIG_DIR / "fig08_phase_timeline.png")
+        print_stage3(phases)
+        print_stage3_post_hoc(measures, phases)
 
 
 if __name__ == "__main__":
